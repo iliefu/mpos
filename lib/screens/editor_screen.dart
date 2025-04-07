@@ -25,7 +25,7 @@ class _EditorScreenState extends State<EditorScreen> {
     return Scaffold(
       appBar: AppBar(
         centerTitle: false,
-        title: const Text('WeMark'),
+        title: const Text('MPost'),
         actions: [
           if (_showHtmlPreview) // 仅在预览模式显示主题选择器
             const Padding(

@@ -4,13 +4,12 @@ A new Flutter project.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+你希望开发一个手机 App，完成以下流程：
 
-A few resources to get you started if this is your first Flutter project:
+用户粘贴从 ChatGPT/DeepSeek 等生成的 Markdown 内容
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+App 提供主题预览（类似 Typora 的效果）
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+渲染并排版为「微信公众号文章适配的 HTML」
+
+用户选择样式，一键复制 HTML（可粘贴到微信订阅号助手）
