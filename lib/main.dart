@@ -24,7 +24,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'WeMark - Markdown编辑器',
+      title: 'MPost - Markdown编辑器',
       routerConfig: router,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
