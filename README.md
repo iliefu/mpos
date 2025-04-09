@@ -13,3 +13,8 @@ App 提供主题预览（类似 Typora 的效果）
 渲染并排版为「微信公众号文章适配的 HTML」
 
 用户选择样式，一键复制 HTML（可粘贴到微信订阅号助手）
+
+
+## 基于markdown的微信公众号编辑器
+
+https://github.com/swiftdo/markdown-nice
