@@ -1,21 +1,50 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'markdown_styles.dart';
-import 'markdown_converter.dart'; // 新增导入
+import 'package:mpost/local_service.dart';
+import 'package:webview_flutter_plus/webview_flutter_plus.dart';
 
 class AppState extends ChangeNotifier {
   String htmlContent = '';
-  MarkdownStyle currentStyle = MarkdownStyle.elegant;
   String currentMarkdown = '';
 
-  void updateHtmlContent(String markdown) { // 参数改为接收markdown
-    currentMarkdown = markdown;
-    htmlContent = markdownToHtml(currentMarkdown, style: currentStyle); // 添加转换逻辑
-    notifyListeners();
+  late final WebViewControllerPlus controllerPlus;
+
+  late final WebViewWidget webView;
+
+  AppState() {
+    try {
+      controllerPlus =
+          WebViewControllerPlus()
+            ..setJavaScriptMode(JavaScriptMode.unrestricted)
+            ..setBackgroundColor(const Color(0x00000000))
+            ..loadFlutterAssetWithServer(
+              'assets/web/index.html',
+              localhostServer.port!,
+            );
+
+      webView = WebViewWidget(controller: controllerPlus);
+    } catch (e) {
+      print(e);
+    }
   }
 
-  void changeStyle(MarkdownStyle newStyle) {
-    currentStyle = newStyle;
-    htmlContent = markdownToHtml(currentMarkdown, style: currentStyle);
+  Future<String?> renderMarkdownToHtml(String markdown) async {
+    try {
+      final hl = await controllerPlus.runJavaScriptReturningResult(
+        "renderMarkdownToHtml(${jsonEncode(markdown)}, 0)",
+      );
+      return hl.toString();
+    } catch (e) {
+      print(e);
+      return null;
+    }
+  }
+
+  void updateHtmlContent(String markdown) async {
+    // 参数改为接收markdown
+    currentMarkdown = markdown;
+    htmlContent = (await renderMarkdownToHtml(currentMarkdown)) ?? ''; // 添加转换逻辑
     notifyListeners();
   }
 }

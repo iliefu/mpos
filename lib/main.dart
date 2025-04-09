@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'app_router.dart';
 import 'utils/app_state.dart';
+import 'local_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await localhostServer.start(port: 0);
   
   final appState = AppState();
-  
   runApp(
     MultiProvider(
       providers: [

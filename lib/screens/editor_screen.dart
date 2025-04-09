@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_html/flutter_html.dart';
+import 'package:mpost/widgets/webview.dart';
 import 'package:provider/provider.dart';
 // 确认导入路径正确
 import '../utils/app_state.dart';
-
-import '../widgets/theme_selector.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key});
@@ -19,6 +17,11 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _showHtmlPreview = false;
 
   @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
 
@@ -27,11 +30,6 @@ class _EditorScreenState extends State<EditorScreen> {
         centerTitle: false,
         title: const Text('MPost'),
         actions: [
-          if (_showHtmlPreview) // 仅在预览模式显示主题选择器
-            const Padding(
-              padding: EdgeInsets.only(right: 8.0),
-              child: ThemeSelector(),
-            ),
           IconButton(
             icon: Icon(
               _showHtmlPreview ? Icons.visibility_off : Icons.visibility,
@@ -42,23 +40,37 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
       body: SafeArea(
-        child:
-            _showHtmlPreview
-                ? SingleChildScrollView(child: Html(data: appState.htmlContent))
-                : TextField(
-                  controller: _controller,
-                  maxLines: null,
-                  expands: true,
-                  onChanged: (value) => appState.updateHtmlContent(value),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    hintText: '开始输入Markdown内容...',
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 16.0,
-                      vertical: 8.0,
-                    ),
-                  ),
-                ),
+        child: Stack(
+          children: [
+            appState.webView,
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(color: Colors.white),
+                alignment: Alignment.topCenter,
+                width: MediaQuery.of(context).size.width,
+                height: MediaQuery.of(context).size.height,
+                child:
+                    _showHtmlPreview
+                        ? WebView(htmlContent: appState.htmlContent)
+                        : TextField(
+                          controller: _controller,
+                          maxLines: null,
+                          expands: true,
+                          onChanged:
+                              (value) => appState.updateHtmlContent(value),
+                          decoration: const InputDecoration(
+                            border: InputBorder.none,
+                            hintText: '开始输入Markdown内容...',
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 16.0,
+                              vertical: 8.0,
+                            ),
+                          ),
+                        ),
+              ),
+            ),
+          ],
+        ),
       ),
 
       floatingActionButton:
@@ -74,23 +86,6 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: const Icon(Icons.content_copy),
               )
               : null,
-    );
-  }
-
-  void showThemeDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('选择主题'),
-            content: const ThemeSelector(),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('关闭'),
-              ),
-            ],
-          ),
     );
   }
 }
