@@ -23,6 +23,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final contentSize = MediaQuery.of(context).size;
     final appState = context.watch<AppState>();
 
     return Scaffold(
@@ -47,8 +48,8 @@ class _EditorScreenState extends State<EditorScreen> {
               child: Container(
                 decoration: BoxDecoration(color: Colors.white),
                 alignment: Alignment.topCenter,
-                width: MediaQuery.of(context).size.width,
-                height: MediaQuery.of(context).size.height,
+                width: contentSize.width,
+                height: contentSize.height,
                 child:
                     _showHtmlPreview
                         ? WebView(htmlContent: appState.htmlContent)

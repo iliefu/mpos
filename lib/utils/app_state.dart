@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mpost/local_service.dart';
@@ -31,15 +32,27 @@ class AppState extends ChangeNotifier {
 
   Future<String?> renderMarkdownToHtml(String markdown) async {
     try {
-      final hl = await controllerPlus.runJavaScriptReturningResult(
+      var hl = await controllerPlus.runJavaScriptReturningResult(
         "renderMarkdownToHtml(${jsonEncode(markdown)}, 0)",
       );
-      return hl.toString();
+      if (hl is String && Platform.isAndroid) {
+        hl = jsonDecode(hl);
+      } 
+      hl = removeSurroundingQuotes(hl.toString());      
+      return hl;
     } catch (e) {
       print(e);
       return null;
     }
   }
+
+  String removeSurroundingQuotes(String s) {
+  if ((s.startsWith('"') && s.endsWith('"')) || 
+      (s.startsWith("'") && s.endsWith("'"))) {
+    return s.substring(1, s.length - 1);
+  }
+  return s;
+}
 
   void updateHtmlContent(String markdown) async {
     // 参数改为接收markdown
