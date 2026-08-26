@@ -34,8 +34,7 @@ jobs:
       - name: Cache pub packages
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.pub-cache
+          path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
 
       - name: Install Gradle (multiple-version fallback), seed wrapper cache, and expose selected version
@@ -131,13 +130,14 @@ jobs:
             echo "SELECTED_GRADLE_VERSION=$SELECTED" >> $GITHUB_ENV
           fi
 
-      - name: Ensure android/local.properties exists (so settings can read sdk.dir)
+      - name: Ensure android/local.properties exists (so settings can read sdk.dir and flutter.sdk)
         run: |
           mkdir -p android
           cat > android/local.properties <<EOF
-          sdk.dir=${ANDROID_SDK_ROOT}
-          EOF
-        # run unconditionally; creating this file prevents Gradle failing during wrapper regen
+sdk.dir=${ANDROID_SDK_ROOT}
+flutter.sdk=${FLUTTER_ROOT}
+ndk.dir=${ANDROID_SDK_ROOT}/ndk/27.0.12077973
+EOF
 
       - name: (If available) Regenerate Gradle wrapper in android using selected Gradle
         if: env.SELECTED_GRADLE_VERSION != ''
@@ -195,13 +195,13 @@ jobs:
           mkdir -p android
           echo "${{ env.KEYSTORE_BASE64 }}" | base64 --decode > android/key.jks
           cat > android/key.properties <<EOF
-          storePassword=${{ env.KEYSTORE_PASSWORD }}
-          keyPassword=${{ env.KEY_PASSWORD }}
-          keyAlias=${{ env.KEY_ALIAS }}
-          storeFile=key.jks
-          EOF
+storePassword=${{ env.KEYSTORE_PASSWORD }}
+keyPassword=${{ env.KEY_PASSWORD }}
+keyAlias=${{ env.KEY_ALIAS }}
+storeFile=key.jks
+EOF
 
-      - name: Flutter pub get
+      - name: Install dependencies
         run: flutter pub get
 
       - name: Build Android APK (release)
