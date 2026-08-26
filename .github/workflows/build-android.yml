@@ -36,22 +36,50 @@ jobs:
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
-          
+
+      - name: Install Android command-line tools and required SDKs (licenses handled safely)
+        run: |
+          set -euo pipefail
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o /tmp/cmdline.zip
+          unzip -q /tmp/cmdline.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+
+          # Temporarily disable pipefail so piping 'yes' to sdkmanager does not cause a broken-pipe failure
+          set +o pipefail
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;27.0.12077973"
+          SDK_INSTALL_EXIT=$?
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
+          SDK_LICENSES_EXIT=$?
+          set -o pipefail
+          if [ $SDK_INSTALL_EXIT -ne 0 ]; then
+            echo "sdkmanager install failed with exit $SDK_INSTALL_EXIT" >&2
+            exit $SDK_INSTALL_EXIT
+          fi
+          if [ $SDK_LICENSES_EXIT -ne 0 ]; then
+            echo "sdkmanager --licenses failed with exit $SDK_LICENSES_EXIT" >&2
+            exit $SDK_LICENSES_EXIT
+          fi
+
+      - name: Export Android SDK envs
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
       - name: Install Gradle (multiple-version fallback), seed wrapper cache, and expose selected version
         id: install_gradle
         run: |
           set -euo pipefail
-      
-          # Minimum Gradle required by Flutter
+
           REQUIRED="8.14.0"
-      
-          # Candidate Gradle versions to try (preferred -> fallback). Include multiple 8.14.x/nearby versions.
           CANDIDATES=("8.14.3" "8.14.2" "8.14.1" "8.14.0" "8.15.1" "8.15.0" "8.13.1" "8.13.0" "8.12.1" "8.10.2")
-      
           TARGET_DIR="$RUNNER_TEMP/gradle"
           mkdir -p "$TARGET_DIR"
           cd "$RUNNER_TEMP"
-      
+
           download_with_retries() {
             local url=$1 out=$2 tries=3 wait=2
             for i in $(seq 1 $tries); do
@@ -75,21 +103,19 @@ jobs:
             done
             return 1
           }
-      
+
           SELECTED=""
           for v in "${CANDIDATES[@]}"; do
             echo "Trying Gradle ${v} ..."
             BIN_ZIP="gradle-${v}-bin.zip"
             ALL_ZIP="gradle-${v}-all.zip"
-      
-            # Try bin.zip first to get CLI
+
             if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
               unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
               SELECTED="$v"
-      
-              # Try to download the all.zip to seed wrapper cache (preferred)
+
               if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
                 WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
                 mkdir -p "$WRAPPER_BASE"
@@ -100,47 +126,43 @@ jobs:
               else
                 echo "Could not download ${ALL_ZIP} to seed wrapper cache, but CLI gradle installed."
               fi
-      
+
               break
             fi
-      
-            # Try all.zip directly and seed wrapper cache with extra subdir
+
             if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
-      
+
               WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
               mkdir -p "$WRAPPER_BASE"
               SUBDIR="$(date +%s)-$RANDOM"
               mkdir -p "$WRAPPER_BASE/$SUBDIR"
               unzip -q "${ALL_ZIP}" -d "$WRAPPER_BASE/$SUBDIR"
               echo "Installed and seeded wrapper cache for gradle-${v} in $WRAPPER_BASE/$SUBDIR"
-      
+
               SELECTED="$v"
               break
             fi
-      
+
             echo "Gradle ${v} not available, trying next candidate..."
           done
-      
-          # If nothing downloaded, fallback to skip later
+
           if [ -z "$SELECTED" ]; then
             echo "WARNING: Could not download any candidate Gradle versions; will fall back to skip-validation mode."
             echo "USE_SKIP=true" >> $GITHUB_ENV
             echo "SELECTED_GRADLE_VERSION=" >> $GITHUB_ENV
             exit 0
           fi
-      
-          # Ensure selected meets minimum required version (using sort -V)
+
           if [ "$(printf '%s\n' "$REQUIRED" "$SELECTED" | sort -V | head -n1)" != "$REQUIRED" ]; then
             echo "Selected Gradle ${SELECTED} is older than required ${REQUIRED}. Will fall back to skip-validation mode."
             echo "USE_SKIP=true" >> $GITHUB_ENV
             echo "SELECTED_GRADLE_VERSION=${SELECTED}" >> $GITHUB_ENV
             exit 0
           fi
-      
-          # Selected is OK (>= REQUIRED)
+
           echo "Selected Gradle version: $SELECTED (>= $REQUIRED)"
           echo "USE_SKIP=false" >> $GITHUB_ENV
           echo "SELECTED_GRADLE_VERSION=$SELECTED" >> $GITHUB_ENV
@@ -164,48 +186,12 @@ jobs:
           sed -n '1,120p' gradle/wrapper/gradle-wrapper.properties || true
           cd ..
 
-      - name: Install Android command-line tools and required SDKs (licenses handled safely)
-        run: |
-          set -euo pipefail
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          set +o pipefail
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;27.0.12077973"
-          SDK_INSTALL_EXIT=$?
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
-          SDK_LICENSES_EXIT=$?
-          set -o pipefail
-          if [ $SDK_INSTALL_EXIT -ne 0 ]; then
-            echo "sdkmanager install failed with exit $SDK_INSTALL_EXIT" >&2
-            exit $SDK_INSTALL_EXIT
-          fi
-          if [ $SDK_LICENSES_EXIT -ne 0 ]; then
-            echo "sdkmanager --licenses failed with exit $SDK_LICENSES_EXIT" >&2
-            exit $SDK_LICENSES_EXIT
-          fi
-
-      - name: Export Android SDK envs
-        run: |
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-
       - name: (Optional) Decode keystore from secret and create key.properties
         if: ${{ env.KEYSTORE_BASE64 != '' }}
         run: |
           mkdir -p android
           echo "${{ env.KEYSTORE_BASE64 }}" | base64 --decode > android/key.jks
-          cat > android/key.properties <<EOF
-          storePassword=${{ env.KEYSTORE_PASSWORD }}
-          keyPassword=${{ env.KEY_PASSWORD }}
-          keyAlias=${{ env.KEY_ALIAS }}
-          storeFile=key.jks
-          EOF
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=key.jks\n' "${{ env.KEYSTORE_PASSWORD }}" "${{ env.KEY_PASSWORD }}" "${{ env.KEY_ALIAS }}" > android/key.properties
 
       - name: Install dependencies
         run: flutter pub get
@@ -214,7 +200,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${USE_SKIP:-false}" = "true" ]; then
-            echo "Gradle not preinstalled. Building with --android-skip-build-dependency-validation"
+            echo "Gradle not preinstalled or compatible. Building with --android-skip-build-dependency-validation"
             flutter build apk --release --android-skip-build-dependency-validation
           else
             echo "Building normally (wrapper regenerated/seeded)."
