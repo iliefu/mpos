@@ -38,25 +38,78 @@ jobs:
             ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
 
-      - name: Install Gradle & seed Gradle wrapper cache (avoid wrapper download)
+      - name: Install Gradle & seed Gradle wrapper cache (robust)
         run: |
           set -euo pipefail
+
           GRADLE_VERSION=8.14.0
+          TARGET_DIR="$RUNNER_TEMP/gradle"
+          BIN_ZIP="gradle-${GRADLE_VERSION}-bin.zip"
+          ALL_ZIP="gradle-${GRADLE_VERSION}-all.zip"
 
-          echo "Installing Gradle CLI ${GRADLE_VERSION} to runner temp..."
-          curl -sSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o gradle-${GRADLE_VERSION}-bin.zip
-          mkdir -p $RUNNER_TEMP/gradle
-          unzip -q gradle-${GRADLE_VERSION}-bin.zip -d $RUNNER_TEMP/gradle
-          echo "$RUNNER_TEMP/gradle/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
-          echo "GRADLE_HOME=$RUNNER_TEMP/gradle/gradle-${GRADLE_VERSION}" >> $GITHUB_ENV
+          download_with_retries() {
+            local url=$1
+            local out=$2
+            local tries=3
+            local wait=2
+            for i in $(seq 1 $tries); do
+              echo "Attempt $i downloading $url ..."
+              if curl -fSL "$url" -o "$out"; then
+                # quick sanity size check
+                if [ "$(stat -c%s "$out")" -gt 10000 ]; then
+                  # validate zip
+                  if unzip -tq "$out" >/dev/null 2>&1; then
+                    echo "Downloaded and validated $out"
+                    return 0
+                  else
+                    echo "Downloaded file is not a valid zip: $out"
+                  fi
+                else
+                  echo "Downloaded file is too small: $(stat -c%s "$out") bytes"
+                fi
+              else
+                echo "curl failed for $url"
+              fi
+              rm -f "$out"
+              sleep $((wait * i))
+            done
+            return 1
+          }
 
-          echo "Seeding Gradle wrapper cache so wrapper does not need to download distribution..."
-          # Create the folder the wrapper checks under ~/.gradle/wrapper/dists/<dist-name>/
-          WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${GRADLE_VERSION}-all"
-          mkdir -p "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
-          # Download the all zip and unzip into the seeded folder
-          curl -sSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-all.zip" -o gradle-${GRADLE_VERSION}-all.zip
-          unzip -q gradle-${GRADLE_VERSION}-all.zip -d "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
+          mkdir -p "$TARGET_DIR"
+          cd "$RUNNER_TEMP"
+
+          # Try bin.zip first (smaller). If successful, still attempt to fetch all.zip for seeding wrapper cache.
+          if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
+            unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
+            echo "$TARGET_DIR/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
+            echo "GRADLE_HOME=$TARGET_DIR/gradle-${GRADLE_VERSION}" >> $GITHUB_ENV
+
+            # Try to get the all.zip to seed wrapper cache (preferred). If this fails, we will still have gradle CLI.
+            if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
+              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${GRADLE_VERSION}-all"
+              mkdir -p "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
+              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
+              echo "Seeded Gradle wrapper cache with all.zip"
+            else
+              echo "Warning: couldn't download ${ALL_ZIP}; wrapper cache not seeded, but system Gradle is installed."
+            fi
+          else
+            # bin.zip failed — try the all.zip directly
+            if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
+              unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
+              echo "$TARGET_DIR/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
+              echo "GRADLE_HOME=$TARGET_DIR/gradle-${GRADLE_VERSION}" >> $GITHUB_ENV
+
+              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${GRADLE_VERSION}-all"
+              mkdir -p "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
+              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
+              echo "Downloaded all.zip and seeded wrapper cache"
+            else
+              echo "ERROR: Failed to download Gradle ${GRADLE_VERSION} (both bin and all zips)."
+              exit 2
+            fi
+          fi
 
       - name: Install Android command-line tools and required SDKs
         run: |
@@ -94,8 +147,8 @@ jobs:
       - name: Build Android APK (release)
         run: flutter build apk --release
 
-      - name: Upload APK artifact
+      - name: Upload APK artifact(s)
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
+          name: app-release-apks
           path: build/app/outputs/flutter-apk/*.apk
