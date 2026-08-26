@@ -5,6 +5,8 @@ on:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
+  
+permissions: contents: write
 
 jobs:
   build:
@@ -212,3 +214,28 @@ jobs:
         with:
           name: app-release-apks
           path: build/app/outputs/flutter-apk/*.apk
+
+      - name: Create GitHub Release and upload APK(s)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          APK_DIR="build/app/outputs/flutter-apk"
+          # enable nullglob so the glob expands to empty list when no files
+          shopt -s nullglob
+          files=($APK_DIR/*.apk)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No APK files found in $APK_DIR — skipping release upload."
+            exit 0
+          fi
+      
+          # compose a stable tag name using run number + short sha
+          TAG="apk-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}"
+          TITLE="Automated APK: ${TAG}"
+          NOTES="Automated build from run ${GITHUB_RUN_NUMBER} (${GITHUB_SHA})"
+      
+          echo "Creating release '$TAG' and uploading ${#files[@]} asset(s)..."
+          # Create release and upload all APK files
+          gh release create "$TAG" "${files[@]}" --title "$TITLE" --notes "$NOTES" --repo "${GITHUB_REPOSITORY}"
+      
+          echo "Release created: $TAG"
