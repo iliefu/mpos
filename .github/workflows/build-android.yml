@@ -38,7 +38,7 @@ jobs:
             ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
 
-      - name: Install Gradle (multiple-version fallback) and seed Gradle wrapper cache
+      - name: Install Gradle (multiple-version fallback) and seed Gradle wrapper cache (correctly)
         run: |
           set -euo pipefail
 
@@ -78,30 +78,42 @@ jobs:
             BIN_ZIP="gradle-${v}-bin.zip"
             ALL_ZIP="gradle-${v}-all.zip"
 
+            # 1) Try bin zip (smaller) to install CLI gradle
             if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
               unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
               SELECTED="$v"
+
+              # 2) Try to seed wrapper cache using ALL zip. Place extracted files into a hash subdir so wrapper finds it.
               if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
-                WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
-                mkdir -p "$WRAPPER_DIST_DIR/gradle-${v}"
-                unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${v}"
-                echo "Seeded wrapper cache for gradle-${v}"
+                WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
+                mkdir -p "$WRAPPER_BASE"
+                # create a unique/hash-like subdir name (wrapper expects a subdir)
+                SUBDIR="$(date +%s)-$RANDOM"
+                mkdir -p "$WRAPPER_BASE/$SUBDIR"
+                unzip -q "${ALL_ZIP}" -d "$WRAPPER_BASE/$SUBDIR"
+                echo "Seeded wrapper cache for gradle-${v} in $WRAPPER_BASE/$SUBDIR"
               else
                 echo "Could not download ${ALL_ZIP} to seed wrapper cache, but CLI gradle installed."
               fi
+
               break
             fi
 
+            # 3) Try all.zip directly (slower but complete). Seed wrapper cache with an extra subdir.
             if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
-              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
-              mkdir -p "$WRAPPER_DIST_DIR/gradle-${v}"
-              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${v}"
-              echo "Installed and seeded wrapper cache for gradle-${v}"
+
+              WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
+              mkdir -p "$WRAPPER_BASE"
+              SUBDIR="$(date +%s)-$RANDOM"
+              mkdir -p "$WRAPPER_BASE/$SUBDIR"
+              unzip -q "${ALL_ZIP}" -d "$WRAPPER_BASE/$SUBDIR"
+              echo "Installed and seeded wrapper cache for gradle-${v} in $WRAPPER_BASE/$SUBDIR"
+
               SELECTED="$v"
               break
             fi
@@ -128,16 +140,12 @@ jobs:
           mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
 
-          # sdkmanager prints prompts; piping yes may cause a broken pipe when sdkmanager exits.
-          # Temporarily disable pipefail so the pipeline exit code is sdkmanager's exit code (not yes's).
+          # Temporarily disable pipefail so piping 'yes' to sdkmanager does not cause a broken-pipe failure
           set +o pipefail
-          # Install required SDK components
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;27.0.12077973"
           SDK_INSTALL_EXIT=$?
-          # Accept licenses
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
           SDK_LICENSES_EXIT=$?
-          # Re-enable pipefail and check exit codes
           set -o pipefail
           if [ $SDK_INSTALL_EXIT -ne 0 ]; then
             echo "sdkmanager install failed with exit $SDK_INSTALL_EXIT" >&2
