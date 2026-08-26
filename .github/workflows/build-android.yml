@@ -36,17 +36,22 @@ jobs:
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
-
+          
       - name: Install Gradle (multiple-version fallback), seed wrapper cache, and expose selected version
         id: install_gradle
         run: |
           set -euo pipefail
-
-          CANDIDATES=("8.14.0" "8.13.1" "8.13.0" "8.12.1" "8.10.2")
+      
+          # Minimum Gradle required by Flutter
+          REQUIRED="8.14.0"
+      
+          # Candidate Gradle versions to try (preferred -> fallback). Include multiple 8.14.x/nearby versions.
+          CANDIDATES=("8.14.3" "8.14.2" "8.14.1" "8.14.0" "8.15.1" "8.15.0" "8.13.1" "8.13.0" "8.12.1" "8.10.2")
+      
           TARGET_DIR="$RUNNER_TEMP/gradle"
           mkdir -p "$TARGET_DIR"
           cd "$RUNNER_TEMP"
-
+      
           download_with_retries() {
             local url=$1 out=$2 tries=3 wait=2
             for i in $(seq 1 $tries); do
@@ -70,19 +75,21 @@ jobs:
             done
             return 1
           }
-
+      
           SELECTED=""
           for v in "${CANDIDATES[@]}"; do
             echo "Trying Gradle ${v} ..."
             BIN_ZIP="gradle-${v}-bin.zip"
             ALL_ZIP="gradle-${v}-all.zip"
-
+      
+            # Try bin.zip first to get CLI
             if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
               unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
               SELECTED="$v"
-
+      
+              # Try to download the all.zip to seed wrapper cache (preferred)
               if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
                 WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
                 mkdir -p "$WRAPPER_BASE"
@@ -93,38 +100,50 @@ jobs:
               else
                 echo "Could not download ${ALL_ZIP} to seed wrapper cache, but CLI gradle installed."
               fi
-
+      
               break
             fi
-
+      
+            # Try all.zip directly and seed wrapper cache with extra subdir
             if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
-
+      
               WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
               mkdir -p "$WRAPPER_BASE"
               SUBDIR="$(date +%s)-$RANDOM"
               mkdir -p "$WRAPPER_BASE/$SUBDIR"
               unzip -q "${ALL_ZIP}" -d "$WRAPPER_BASE/$SUBDIR"
               echo "Installed and seeded wrapper cache for gradle-${v} in $WRAPPER_BASE/$SUBDIR"
-
+      
               SELECTED="$v"
               break
             fi
-
+      
             echo "Gradle ${v} not available, trying next candidate..."
           done
-
+      
+          # If nothing downloaded, fallback to skip later
           if [ -z "$SELECTED" ]; then
             echo "WARNING: Could not download any candidate Gradle versions; will fall back to skip-validation mode."
             echo "USE_SKIP=true" >> $GITHUB_ENV
             echo "SELECTED_GRADLE_VERSION=" >> $GITHUB_ENV
-          else
-            echo "Selected Gradle version: $SELECTED"
-            echo "USE_SKIP=false" >> $GITHUB_ENV
-            echo "SELECTED_GRADLE_VERSION=$SELECTED" >> $GITHUB_ENV
+            exit 0
           fi
+      
+          # Ensure selected meets minimum required version (using sort -V)
+          if [ "$(printf '%s\n' "$REQUIRED" "$SELECTED" | sort -V | head -n1)" != "$REQUIRED" ]; then
+            echo "Selected Gradle ${SELECTED} is older than required ${REQUIRED}. Will fall back to skip-validation mode."
+            echo "USE_SKIP=true" >> $GITHUB_ENV
+            echo "SELECTED_GRADLE_VERSION=${SELECTED}" >> $GITHUB_ENV
+            exit 0
+          fi
+      
+          # Selected is OK (>= REQUIRED)
+          echo "Selected Gradle version: $SELECTED (>= $REQUIRED)"
+          echo "USE_SKIP=false" >> $GITHUB_ENV
+          echo "SELECTED_GRADLE_VERSION=$SELECTED" >> $GITHUB_ENV
 
       - name: Ensure android/local.properties exists (so settings can read sdk.dir and flutter.sdk)
         run: |
