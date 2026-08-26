@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Candidate Gradle versions to try (order = preferred -> fallback)
+          # Candidate Gradle versions to try (preferred -> fallback)
           CANDIDATES=("8.14.0" "8.13.1" "8.13.0" "8.12.1" "8.10.2")
           TARGET_DIR="$RUNNER_TEMP/gradle"
           mkdir -p "$TARGET_DIR"
@@ -53,7 +53,6 @@ jobs:
             for i in $(seq 1 $tries); do
               echo "Attempt $i downloading $url ..."
               if curl -fSL "$url" -o "$out"; then
-                # sanity size check
                 if [ "$(stat -c%s "$out")" -gt 10000 ]; then
                   if unzip -tq "$out" >/dev/null 2>&1; then
                     echo "Downloaded and validated $out"
@@ -79,13 +78,11 @@ jobs:
             BIN_ZIP="gradle-${v}-bin.zip"
             ALL_ZIP="gradle-${v}-all.zip"
 
-            # Prefer bin.zip for CLI install (smaller), but we will attempt to seed wrapper cache with all.zip if possible
             if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
               unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
               SELECTED="$v"
-              # try to seed wrapper cache with all.zip (not required for running, but preferred)
               if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
                 WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
                 mkdir -p "$WRAPPER_DIST_DIR/gradle-${v}"
@@ -97,7 +94,6 @@ jobs:
               break
             fi
 
-            # Try all.zip directly (slower but complete)
             if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
@@ -114,24 +110,43 @@ jobs:
           done
 
           if [ -z "$SELECTED" ]; then
-            echo "WARNING: Could not download any candidate Gradle versions; build will proceed using the project's wrapper but may try to download Gradle."
-            echo "If the wrapper download fails we will fall back to skip-validation mode."
+            echo "WARNING: Could not download any candidate Gradle versions; will fall back to skip-validation mode."
             echo "USE_SKIP=true" >> $GITHUB_ENV
           else
             echo "Using Gradle ${SELECTED} installed on runner."
             echo "USE_SKIP=false" >> $GITHUB_ENV
           fi
 
-      - name: Install Android command-line tools and required SDKs
+      - name: Install Android command-line tools and required SDKs (licenses handled safely)
         run: |
+          # Normal strict mode
           set -euo pipefail
+
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
           curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o /tmp/cmdline.zip
           unzip -q /tmp/cmdline.zip -d $ANDROID_SDK_ROOT/cmdline-tools
           mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+
+          # sdkmanager prints prompts; piping yes may cause a broken pipe when sdkmanager exits.
+          # Temporarily disable pipefail so the pipeline exit code is sdkmanager's exit code (not yes's).
+          set +o pipefail
+          # Install required SDK components
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;27.0.12077973"
+          SDK_INSTALL_EXIT=$?
+          # Accept licenses
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
+          SDK_LICENSES_EXIT=$?
+          # Re-enable pipefail and check exit codes
+          set -o pipefail
+          if [ $SDK_INSTALL_EXIT -ne 0 ]; then
+            echo "sdkmanager install failed with exit $SDK_INSTALL_EXIT" >&2
+            exit $SDK_INSTALL_EXIT
+          fi
+          if [ $SDK_LICENSES_EXIT -ne 0 ]; then
+            echo "sdkmanager --licenses failed with exit $SDK_LICENSES_EXIT" >&2
+            exit $SDK_LICENSES_EXIT
+          fi
 
       - name: Export Android SDK envs
         run: |
