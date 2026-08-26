@@ -106,12 +106,14 @@ jobs:
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
               echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
               echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
+
               WRAPPER_BASE="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
               mkdir -p "$WRAPPER_BASE"
               SUBDIR="$(date +%s)-$RANDOM"
               mkdir -p "$WRAPPER_BASE/$SUBDIR"
               unzip -q "${ALL_ZIP}" -d "$WRAPPER_BASE/$SUBDIR"
               echo "Installed and seeded wrapper cache for gradle-${v} in $WRAPPER_BASE/$SUBDIR"
+
               SELECTED="$v"
               break
             fi
@@ -129,15 +131,21 @@ jobs:
             echo "SELECTED_GRADLE_VERSION=$SELECTED" >> $GITHUB_ENV
           fi
 
+      - name: Ensure android/local.properties exists (so settings can read sdk.dir)
+        run: |
+          mkdir -p android
+          cat > android/local.properties <<EOF
+          sdk.dir=${ANDROID_SDK_ROOT}
+          EOF
+        # run unconditionally; creating this file prevents Gradle failing during wrapper regen
+
       - name: (If available) Regenerate Gradle wrapper in android using selected Gradle
         if: env.SELECTED_GRADLE_VERSION != ''
         run: |
           set -euo pipefail
           echo "Regenerating Android Gradle wrapper to use ${SELECTED_GRADLE_VERSION}..."
-          # Use installed gradle CLI to regenerate wrapper files so distributionUrl will point to services.gradle.org
-          # This updates android/gradle/wrapper/gradle-wrapper.properties to a canonical services.gradle.org URL
           cd android
-          # Use the gradle executable if present in $GRADLE_HOME, else fallback to 'gradle' on PATH
+          # Use installed gradle CLI to regenerate wrapper files so distributionUrl will point to services.gradle.org
           if [ -n "${GRADLE_HOME:-}" ] && [ -x "${GRADLE_HOME}/bin/gradle" ]; then
             "${GRADLE_HOME}/bin/gradle" wrapper --gradle-version "${SELECTED_GRADLE_VERSION}" --distribution-type all
           else
@@ -149,14 +157,16 @@ jobs:
 
       - name: Install Android command-line tools and required SDKs (licenses handled safely)
         run: |
+          # Normal strict mode
           set -euo pipefail
+
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
           curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o /tmp/cmdline.zip
           unzip -q /tmp/cmdline.zip -d $ANDROID_SDK_ROOT/cmdline-tools
           mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
 
-          # Disable pipefail temporarily to avoid broken-pipe from 'yes | sdkmanager'
+          # Temporarily disable pipefail so piping 'yes' to sdkmanager does not cause a broken-pipe failure
           set +o pipefail
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;27.0.12077973"
           SDK_INSTALL_EXIT=$?
@@ -198,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${USE_SKIP:-false}" = "true" ]; then
-            echo "Gradle not available; building with --android-skip-build-dependency-validation"
+            echo "Gradle not preinstalled. Building with --android-skip-build-dependency-validation"
             flutter build apk --release --android-skip-build-dependency-validation
           else
             echo "Building normally (wrapper regenerated/seeded)."
