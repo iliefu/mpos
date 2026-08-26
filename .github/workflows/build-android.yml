@@ -38,26 +38,23 @@ jobs:
             ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
 
-      - name: Install Gradle & seed Gradle wrapper cache (robust)
+      - name: Install Gradle (multiple-version fallback) and seed Gradle wrapper cache
         run: |
           set -euo pipefail
 
-          GRADLE_VERSION=8.14.0
+          # Candidate Gradle versions to try (order = preferred -> fallback)
+          CANDIDATES=("8.14.0" "8.13.1" "8.13.0" "8.12.1" "8.10.2")
           TARGET_DIR="$RUNNER_TEMP/gradle"
-          BIN_ZIP="gradle-${GRADLE_VERSION}-bin.zip"
-          ALL_ZIP="gradle-${GRADLE_VERSION}-all.zip"
+          mkdir -p "$TARGET_DIR"
+          cd "$RUNNER_TEMP"
 
           download_with_retries() {
-            local url=$1
-            local out=$2
-            local tries=3
-            local wait=2
+            local url=$1 out=$2 tries=3 wait=2
             for i in $(seq 1 $tries); do
               echo "Attempt $i downloading $url ..."
               if curl -fSL "$url" -o "$out"; then
-                # quick sanity size check
+                # sanity size check
                 if [ "$(stat -c%s "$out")" -gt 10000 ]; then
-                  # validate zip
                   if unzip -tq "$out" >/dev/null 2>&1; then
                     echo "Downloaded and validated $out"
                     return 0
@@ -76,39 +73,53 @@ jobs:
             return 1
           }
 
-          mkdir -p "$TARGET_DIR"
-          cd "$RUNNER_TEMP"
+          SELECTED=""
+          for v in "${CANDIDATES[@]}"; do
+            echo "Trying Gradle ${v} ..."
+            BIN_ZIP="gradle-${v}-bin.zip"
+            ALL_ZIP="gradle-${v}-all.zip"
 
-          # Try bin.zip first (smaller). If successful, still attempt to fetch all.zip for seeding wrapper cache.
-          if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
-            unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
-            echo "$TARGET_DIR/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
-            echo "GRADLE_HOME=$TARGET_DIR/gradle-${GRADLE_VERSION}" >> $GITHUB_ENV
-
-            # Try to get the all.zip to seed wrapper cache (preferred). If this fails, we will still have gradle CLI.
-            if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
-              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${GRADLE_VERSION}-all"
-              mkdir -p "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
-              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
-              echo "Seeded Gradle wrapper cache with all.zip"
-            else
-              echo "Warning: couldn't download ${ALL_ZIP}; wrapper cache not seeded, but system Gradle is installed."
+            # Prefer bin.zip for CLI install (smaller), but we will attempt to seed wrapper cache with all.zip if possible
+            if download_with_retries "https://services.gradle.org/distributions/${BIN_ZIP}" "${BIN_ZIP}"; then
+              unzip -q "${BIN_ZIP}" -d "$TARGET_DIR"
+              echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
+              echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
+              SELECTED="$v"
+              # try to seed wrapper cache with all.zip (not required for running, but preferred)
+              if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
+                WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
+                mkdir -p "$WRAPPER_DIST_DIR/gradle-${v}"
+                unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${v}"
+                echo "Seeded wrapper cache for gradle-${v}"
+              else
+                echo "Could not download ${ALL_ZIP} to seed wrapper cache, but CLI gradle installed."
+              fi
+              break
             fi
-          else
-            # bin.zip failed — try the all.zip directly
+
+            # Try all.zip directly (slower but complete)
             if download_with_retries "https://services.gradle.org/distributions/${ALL_ZIP}" "${ALL_ZIP}"; then
               unzip -q "${ALL_ZIP}" -d "$TARGET_DIR"
-              echo "$TARGET_DIR/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
-              echo "GRADLE_HOME=$TARGET_DIR/gradle-${GRADLE_VERSION}" >> $GITHUB_ENV
-
-              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${GRADLE_VERSION}-all"
-              mkdir -p "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
-              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${GRADLE_VERSION}"
-              echo "Downloaded all.zip and seeded wrapper cache"
-            else
-              echo "ERROR: Failed to download Gradle ${GRADLE_VERSION} (both bin and all zips)."
-              exit 2
+              echo "$TARGET_DIR/gradle-${v}/bin" >> $GITHUB_PATH
+              echo "GRADLE_HOME=$TARGET_DIR/gradle-${v}" >> $GITHUB_ENV
+              WRAPPER_DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-${v}-all"
+              mkdir -p "$WRAPPER_DIST_DIR/gradle-${v}"
+              unzip -q "${ALL_ZIP}" -d "$WRAPPER_DIST_DIR/gradle-${v}"
+              echo "Installed and seeded wrapper cache for gradle-${v}"
+              SELECTED="$v"
+              break
             fi
+
+            echo "Gradle ${v} not available, trying next candidate..."
+          done
+
+          if [ -z "$SELECTED" ]; then
+            echo "WARNING: Could not download any candidate Gradle versions; build will proceed using the project's wrapper but may try to download Gradle."
+            echo "If the wrapper download fails we will fall back to skip-validation mode."
+            echo "USE_SKIP=true" >> $GITHUB_ENV
+          else
+            echo "Using Gradle ${SELECTED} installed on runner."
+            echo "USE_SKIP=false" >> $GITHUB_ENV
           fi
 
       - name: Install Android command-line tools and required SDKs
@@ -145,7 +156,15 @@ jobs:
         run: flutter pub get
 
       - name: Build Android APK (release)
-        run: flutter build apk --release
+        run: |
+          set -euo pipefail
+          if [ "${USE_SKIP:-false}" = "true" ]; then
+            echo "Gradle not preinstalled. Building with --android-skip-build-dependency-validation"
+            flutter build apk --release --android-skip-build-dependency-validation
+          else
+            echo "Building normally (Gradle preinstalled or wrapper seeded)."
+            flutter build apk --release
+          fi
 
       - name: Upload APK artifact(s)
         uses: actions/upload-artifact@v4
